@@ -38,27 +38,31 @@ resource "terraform_data" "sync_schedule" {
       KB_ID      = aws_bedrockagent_knowledge_base.this.id
       DS_ID      = aws_bedrockagent_data_source.s3.data_source_id
       DS_NAME    = aws_bedrockagent_data_source.s3.name
-      DS_DESC    = coalesce(aws_bedrockagent_data_source.s3.description, "")
-      DS_POLICY  = aws_bedrockagent_data_source.s3.data_deletion_policy
-      DS_CONFIG  = jsonencode(local.data_source_configuration_with_schedule)
+      # coalesce は空文字も弾くため null 非許容。description 未設定だと apply 時に落ちる
+      DS_DESC   = aws_bedrockagent_data_source.s3.description == null ? "" : aws_bedrockagent_data_source.s3.description
+      DS_POLICY = aws_bedrockagent_data_source.s3.data_deletion_policy
+      DS_CONFIG = jsonencode(local.data_source_configuration_with_schedule)
     }
     command = <<-EOT
       set -euo pipefail
+
       # UpdateDataSource は全置換。--description を省くと Terraform 管理下の
-      # description が消え、次の plan で永久に差分が出続ける
-      desc_arg=()
+      # description が消え、次の plan で永久に差分が出続ける。
+      # 空配列を "$${arr[@]}" で展開すると bash 3.2 の set -u で unbound variable に
+      # なるため、必ず要素のある配列に引数を積んでいく
+      args=(
+        --region "$AWS_REGION"
+        --knowledge-base-id "$KB_ID"
+        --data-source-id "$DS_ID"
+        --name "$DS_NAME"
+        --data-deletion-policy "$DS_POLICY"
+        --data-source-configuration "$DS_CONFIG"
+      )
       if [[ -n "$DS_DESC" ]]; then
-        desc_arg=(--description "$DS_DESC")
+        args+=(--description "$DS_DESC")
       fi
 
-      aws bedrock-agent update-data-source \
-        --region "$AWS_REGION" \
-        --knowledge-base-id "$KB_ID" \
-        --data-source-id "$DS_ID" \
-        --name "$DS_NAME" \
-        "$${desc_arg[@]}" \
-        --data-deletion-policy "$DS_POLICY" \
-        --data-source-configuration "$DS_CONFIG" \
+      aws bedrock-agent update-data-source "$${args[@]}" \
         --query 'dataSource.dataSourceConfiguration.managedKnowledgeBaseConnectorConfiguration.syncSchedule' \
         --output json
     EOT
